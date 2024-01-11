@@ -1,0 +1,9 @@
+22a23
+> #include <map>
+40a42
+>     std::map<Location*,Register> allocation;
+84a87,90
+> 
+>     void AllocateRegisters(List<Location*> *locations);
+>     void SaveCaller(Location *location);
+>     void RestoreCaller(Location *location);

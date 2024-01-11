@@ -261,6 +261,15 @@ void FnDecl::Emit(CodeGenerator *cg) {
     }
 }
 
+List<Location*> *FnDecl::GetFormalLocations() {
+    List<Location*> *formalLocs = new List<Location*>;
+    for (int i = 0; i < formals->NumElements(); i++) {
+        Location *loc = new Location(fpRelative, CodeGenerator::OffsetToFirstParam + 4*i, formals->Nth(i)->GetName());
+        formalLocs->Append(loc);
+    }
+    return formalLocs;
+}
+
 /* This synthesizes the appropriate label for function in such a way to
  * identify uniquely and without conflicts.  For global funtions, the label
  * is the function name itself.  For methods, the label is the name prefixed by

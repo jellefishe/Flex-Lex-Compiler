@@ -119,6 +119,7 @@ class FnDecl : public Decl
     bool MatchesPrototype(FnDecl *other);
     Type *GetReturnType() {return returnType; }
     List<VarDecl*> *GetFormals() { return formals; }
+    List<Location*> *GetFormalLocations();
     const char *GetFunctionLabel();
     void Emit(CodeGenerator *cg);
 };

@@ -58,6 +58,8 @@ void LoadLabel::EmitSpecific(Mips *mips) {
 
 
 
+
+
 Assign::Assign(Location *d, Location *s)
   : dst(d), src(s) {
   Assert(dst != NULL && src != NULL);
@@ -69,7 +71,7 @@ void Assign::EmitSpecific(Mips *mips) {
 
 List<Location*>* Assign::GetGen() {
   List<Location*>* l = new List<Location*>;
-  l->Append(dst);
+  l->Append(src);
   return l;
 }
 
@@ -249,7 +251,13 @@ LCall::LCall(const char *l, Location *d)
   sprintf(printed, "%s%sLCall %s", dst? dst->GetName(): "", dst?" = ":"", label);
 }
 void LCall::EmitSpecific(Mips *mips) {
+  for (int i = 0; i < liveIn->NumElements(); i++) {
+    mips->SaveCaller(liveIn->Nth(i));
+  }
   mips->EmitLCall(dst, label);
+  for (int i = 0; i < liveIn->NumElements(); i++) {
+    mips->RestoreCaller(liveIn->Nth(i));
+  }
 }
 
 
@@ -260,7 +268,13 @@ ACall::ACall(Location *ma, Location *d)
 	    methodAddr->GetName());
 }
 void ACall::EmitSpecific(Mips *mips) {
+  for (int i = 0; i < liveIn->NumElements(); i++) {
+    mips->SaveCaller(liveIn->Nth(i));
+  }
   mips->EmitACall(dst, methodAddr);
+  for (int i = 0; i < liveIn->NumElements(); i++) {
+    mips->RestoreCaller(liveIn->Nth(i));
+  }
 } 
 
 

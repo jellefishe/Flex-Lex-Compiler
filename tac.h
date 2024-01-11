@@ -49,7 +49,7 @@ class Location
     //
     int spillCost;
 
-    List<Location*> interferences;
+    List<Location*> interferences = List<Location*>();
 	  
   public:
     Location(Segment seg, int offset, const char *name);
@@ -226,11 +226,14 @@ class IfZ: public Instruction {
 
 class BeginFunc: public Instruction {
     int frameSize;
+    List<Location*>* params = new List<Location*>();
   public:
-    BeginFunc();
+    BeginFunc();// List<Location*>* params
     // used to backpatch the instruction with frame size once known
     void SetFrameSize(int numBytesForAllLocalsAndTemps);
     void EmitSpecific(Mips *mips);
+    Hashtable<Location*>* graph = new Hashtable<Location*>();
+    List<Location*>* graphList = new List<Location*>();
 };
 
 class EndFunc: public Instruction {

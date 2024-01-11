@@ -52,6 +52,7 @@ void Mips::SpillRegister(Location *dst, Register reg)
   Emit("sw %s, %d(%s)\t# spill %s from %s to %s%+d", regs[reg].name,
        dst->GetOffset(), offsetFromWhere, dst->GetName(), regs[reg].name,
        offsetFromWhere,dst->GetOffset());
+  regs[reg].isDirty = false;
 }
 
 /* Method: FillRegister
@@ -67,6 +68,8 @@ void Mips::FillRegister(Location *src, Register reg)
   Emit("lw %s, %d(%s)\t# fill %s to %s from %s%+d", regs[reg].name,
        src->GetOffset(), offsetFromWhere, src->GetName(), regs[reg].name,
        offsetFromWhere,src->GetOffset());
+  regs[reg].isDirty = false;
+  regs[reg].var = src;
 }
 
 
@@ -101,10 +104,19 @@ void Mips::Emit(const char *fmt, ...)
  */
 void Mips::EmitLoadConstant(Location *dst, int val)
 {
-  Register reg = rd;
+  Register reg;
+  if (allocation.count(dst)){
+    reg = allocation[dst];
+  }else{
+    reg = rd;
+  }  
   Emit("li %s, %d\t\t# load constant value %d into %s", regs[reg].name,
-	 val, val, regs[reg].name);
-  SpillRegister(dst, reg);
+    val, val, regs[reg].name);
+  regs[reg].isDirty = true;
+  regs[reg].var = dst;
+  if(!allocation.count(dst)) SpillRegister(dst, reg);
+  
+  
 }
 
 /* Method: EmitLoadStringConstant
@@ -133,9 +145,16 @@ void Mips::EmitLoadStringConstant(Location *dst, const char *str)
  */
 void Mips::EmitLoadLabel(Location *dst, const char *label)
 {
-  Register reg = rd;
+  Register reg;
+  if (allocation.count(dst)){
+    reg = allocation[dst];
+  }else{
+    reg = rd;
+  }  
   Emit("la %s, %s\t# load label", regs[reg].name, label);
-  SpillRegister(dst, reg);
+  regs[reg].isDirty = true;
+  regs[reg].var = dst;
+  if(!allocation.count(dst)) SpillRegister(dst, reg);
 }
  
 
@@ -147,9 +166,19 @@ void Mips::EmitLoadLabel(Location *dst, const char *label)
  */
 void Mips::EmitCopy(Location *dst, Location *src)
 {
-  Register reg = rd;
-  FillRegister(src, reg);
-  SpillRegister(dst, reg);
+  Register reg;
+  if (allocation.count(src)){
+    reg = allocation[src];
+  }else{
+    reg = rd;
+    FillRegister(src, reg);
+  }  
+  if(allocation.count(dst)){
+    Register regd = allocation[dst];
+    Emit("move %s, %s\t# copy", regs[regd].name,regs[reg].name);
+    regs[regd].var = dst;
+    regs[regd].isDirty = true;
+  }else{SpillRegister(dst,reg);}
 }
 
 
@@ -164,11 +193,25 @@ void Mips::EmitCopy(Location *dst, Location *src)
 void Mips::EmitLoad(Location *dst, Location *reference, int offset)
 {
   Register regref = rs;
+  if(allocation.count(reference)) 
+  {
+    regref = allocation[reference];
+  }else{
+    FillRegister(reference, regref);
+  }
+  
   Register reg = rd;
-  FillRegister(reference, regref);
+  if (allocation.count(dst))
+  {
+    reg = allocation[dst];
+  }
+  
+  
   Emit("lw %s, %d(%s) \t# load with offset", regs[reg].name,
 	 offset, regs[regref].name);
-  SpillRegister(dst, reg);
+  regs[reg].var = dst;
+  regs[reg].isDirty = true;
+  if(!allocation.count(dst)) SpillRegister(dst, reg);
 }
 
 
@@ -183,9 +226,20 @@ void Mips::EmitLoad(Location *dst, Location *reference, int offset)
 void Mips::EmitStore(Location *reference, Location *value, int offset)
 {
   Register reg = rs;
+  if (allocation.count(value))
+  {
+    reg = allocation[value];
+  }else{
+    FillRegister(value, reg);
+  }
+  
   Register regref = rt;
-  FillRegister(value, reg);
-  FillRegister(reference, regref);
+  if (allocation.count(reference))
+  {
+    regref = allocation[reference];
+  }else{
+    FillRegister(reference, regref);
+  }
   Emit("sw %s, %d(%s) \t# store with offset",
 	 regs[reg].name, offset, regs[regref].name);
 }
@@ -203,13 +257,29 @@ void Mips::EmitBinaryOp(BinaryOp::OpCode code, Location *dst,
 				 Location *op1, Location *op2)
 {
   Register reg = rd;
+  if (allocation.count(dst))
+  {
+    reg = allocation[dst];
+  }
   Register reg1 = rs;
+  if (allocation.count(op1))
+  {
+    reg1 = allocation[op1];
+  }else{
+    FillRegister(op1, reg1);
+  }
   Register reg2 = rt;
-  FillRegister(op1, reg1);
-  FillRegister(op2, reg2);
+  if (allocation.count(op2))
+  {
+    reg2 = allocation[op2];
+  }else{
+    FillRegister(op2, reg2);
+  }
   Emit("%s %s, %s, %s\t", NameForTac(code), regs[reg].name,
 	 regs[reg1].name, regs[reg2].name);
-  SpillRegister(dst, reg);
+   regs[reg].var = dst;
+   regs[reg].isDirty = true;
+  if(!allocation.count(dst))SpillRegister(dst, reg);
 }
 
 
@@ -249,7 +319,12 @@ void Mips::EmitGoto(const char *label)
 void Mips::EmitIfZ(Location *test, const char *label)
 { 
   Register reg = rs;
-  FillRegister(test, reg);
+  if (allocation.count(test))
+  {
+    reg = allocation[test];
+  }else{
+    FillRegister(test, reg);
+  }
   Emit("beqz %s, %s\t# branch if %s is zero ", regs[reg].name, label,
 	 test->GetName());
 }
@@ -265,8 +340,14 @@ void Mips::EmitIfZ(Location *test, const char *label)
 void Mips::EmitParam(Location *arg)
 {
   Register reg = rs;
-  Emit("subu $sp, $sp, 4\t# decrement sp to make space for param");
-  FillRegister(arg, reg);
+  if (allocation.count(arg))
+  {
+    reg = allocation[arg];
+    Emit("subu $sp, $sp, 4\t# decrement sp to make space for param");
+  }else{
+    Emit("subu $sp, $sp, 4\t# decrement sp to make space for param");
+    FillRegister(arg, reg);
+  }
   Emit("sw %s, 4($sp)\t# copy param value to stack", regs[reg].name);
 }
 
@@ -287,9 +368,15 @@ void Mips::EmitCallInstr(Location *result, const char *fn, bool isLabel)
   Emit("%s %-15s\t# jump to function", isLabel? "jal": "jalr", fn);
   if (result != NULL) {
     Register reg = rd;
+    if(allocation.count(result))
+    {
+      reg = allocation[result];
+      regs[reg].var = result;
+      regs[reg].isDirty = true;
+    }
     Emit("move %s, %s\t\t# copy function return value from $v0",
     regs[reg].name, regs[v0].name);
-    SpillRegister(result, reg);
+    if(!allocation.count(result)) SpillRegister(result, reg);
   }
 }
 
@@ -303,7 +390,12 @@ void Mips::EmitLCall(Location *dst, const char *label)
 void Mips::EmitACall(Location *dst, Location *fn)
 {
   Register reg = rs;
+  if (allocation.count(fn))
+  {
+    reg = allocation[fn];
+  }else{
   FillRegister(fn, reg);
+  }
   EmitCallInstr(dst, regs[reg].name, false);
 }
 
@@ -338,7 +430,12 @@ void Mips::EmitPopParams(int bytes)
   if (returnVal != NULL) 
     {
       Register reg = rd;
-      FillRegister(returnVal, reg);
+      if(allocation.count(returnVal))
+      {
+        reg = allocation[returnVal];
+      }else{
+        FillRegister(returnVal, reg);
+      }
       Emit("move $v0, %s\t\t# assign return value into $v0",
 	   regs[reg].name);
     }
@@ -488,33 +585,45 @@ void Mips::AllocateRegisters(List<Location*> *locations) {
 				 true, true, true, true, true, true, true, true,
 				 true, true, false, false, false, false, false, true};
     if (locations->NumElements() == 0)
-	return;
-    for (int i = 0; i < locations->NumElements(); ++i) {
-	Location *location = locations->Nth(i);
-	List<Location*> *interferences = location->GetInterferences();
-	if (interferences->NumElements() < NumRegs - 9) {
-	    locations->Remove(location);
-	    for (int j = 0; j < interferences->NumElements(); ++j)
-		interferences->Nth(j)->GetInterferences()->Remove(location);
-	    AllocateRegisters(locations);
-	    for (int j = 0; j < interferences->NumElements(); ++j)
-		if (allocation.count(interferences->Nth(j)))
-		    free[allocation[interferences->Nth(j)]] = false;
-	    int reg = zero;
-	    while (reg < NumRegs && !free[reg])
-		++reg;
-	    //fprintf(stderr, "Allocated %s to %s\n", location->GetName(), regs[reg].name);
-	    allocation[location] = static_cast<Register>(reg);
 	    return;
-	}
+    for (int i = 0; i < locations->NumElements(); ++i) {
+      Location *location = locations->Nth(i);
+      List<Location*> *interferences = location->GetInterferences();
+      if (interferences->NumElements() < NumRegs - 9) {
+          locations->Remove(location);
+          //fprintf(stderr, "Allocated1 %d\n",interferences->NumElements());
+          for (int j = 0; j < interferences->NumElements(); ++j){
+            //fprintf(stderr, "Removing %s from %s\n", location->GetName(), interferences->Nth(j)->GetName());
+            if (interferences->Nth(j)!=location)
+              interferences->Nth(j)->GetInterferences()->Remove(location);
+          }
+          
+            
+          //fprintf(stderr, "Allocated2 %d\n",interferences->NumElements());
+          AllocateRegisters(locations);
+          //fprintf(stderr, "Allocated3 %d\n",interferences->NumElements());
+          for (int j = 0; j < interferences->NumElements(); ++j){
+            if (allocation.count(interferences->Nth(j))){
+              free[allocation[interferences->Nth(j)]] = false;
+              //fprintf(stderr, "Register %s is not free, containg %s\n", regs[allocation[interferences->Nth(j)]].name, interferences->Nth(j)->GetName());
+            }
+          }
+        
+          int reg = zero;
+          while (reg < NumRegs && !free[reg])
+            ++reg;
+          //fprintf(stderr, "Allocated %s to %s\n", location->GetName(), regs[reg].name);
+          allocation[location] = static_cast<Register>(reg);
+          return;
+	    }
     }
     Location *spilled = locations->Nth(0);
     for (int i = 1; i < locations->NumElements(); ++i) {
-	Location *location = locations->Nth(i);
-	if (location->GetScore() < spilled->GetScore())
-	    spilled = location;
+      Location *location = locations->Nth(i);
+      if (location->GetScore() < spilled->GetScore())
+          spilled = location;
     }
-    //fprintf(stderr, "Spilled %s\n", spilled->GetName());
+    fprintf(stderr, "Spilled %s\n", spilled->GetName());
     locations->Remove(spilled);
     for (int j = 0; j < spilled->GetInterferences()->NumElements(); ++j)
 	spilled->GetInterferences()->Nth(j)->GetInterferences()->Remove(spilled);

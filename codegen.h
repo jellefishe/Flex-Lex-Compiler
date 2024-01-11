@@ -44,6 +44,11 @@ class CodeGenerator {
     CodeGenerator();
     void createCFG();
     void liveVariableAnalysis();
+    bool compareLocList(List<Location*> *l1, List<Location*> *l2);
+    bool compareLoc(Location *l1, Location *l2);
+    List<Location*>*  reorderLoc(List<Location*> *l);
+    Mips* interferenceGraph();
+    
          // Assigns a new unique label name and returns it. Does not
          // generate any Tac instructions (see GenLabel below if needed)
     char *NewLabel();

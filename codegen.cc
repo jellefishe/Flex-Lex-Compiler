@@ -11,6 +11,7 @@
 #include "mips.h"
 #include "ast_decl.h"
 #include "errors.h"
+#include <stack>
   
 CodeGenerator::CodeGenerator()
 {
@@ -123,7 +124,7 @@ void CodeGenerator::GenReturn(Location *val)
 
 BeginFunc *CodeGenerator::GenBeginFunc(FnDecl *fn)
 {
-  BeginFunc *result = new BeginFunc;
+  BeginFunc *result = new BeginFunc();
   code->Append(insideFn = result);
   List<VarDecl*> *formals = fn->GetFormals();
   int start = OffsetToFirstParam;
@@ -230,19 +231,20 @@ void CodeGenerator::GenVTable(const char *className, List<const char *> *methodL
 void CodeGenerator::DoFinalCodeGen()
 {
   createCFG();
+  Mips* mips = interferenceGraph();
   if (IsDebugOn("tac")) { // if debug don't translate to mips, just print Tac
     for (int i = 0; i < code->NumElements(); i++)
 	code->Nth(i)->Print();
    }  else {
-     Mips mips;
-     mips.EmitPreamble();
+     mips->EmitPreamble();
      for (int i = 0; i < code->NumElements(); i++)
-	 code->Nth(i)->Emit(&mips);
+	      code->Nth(i)->Emit(mips);
   }
 }
 
 void CodeGenerator::createCFG()
 {
+  //std::cout<<"createCFG"<<std::endl;
   Instruction *prev = NULL;
   //spot position of labels to jump to
   Hashtable<Instruction*> *labelTable = new Hashtable<Instruction*>;
@@ -252,7 +254,7 @@ void CodeGenerator::createCFG()
       labelTable->Enter(label->GetName(), code->Nth(i+1));
     }
    }
-
+  
   //create CFG
   for (int i = 0; i < code->NumElements(); i++) {
     Instruction *instr = code->Nth(i);
@@ -263,16 +265,36 @@ void CodeGenerator::createCFG()
     }else if(ifz){
       Instruction *next = labelTable->Lookup(ifz->GetLabel());
       ifz->successors.Append(next);
-      ifz->successors.Append(code->Nth(i+1));
+      if(i< code->NumElements()-1) ifz->successors.Append(code->Nth(i+1));
     }else if(gt){
       Instruction *next = labelTable->Lookup(gt->GetLabel());
       gt->successors.Append(next);
     }else{
-      instr->successors.Append(code->Nth(i+1));
+      if(i< code->NumElements()-1) instr->successors.Append(code->Nth(i+1));
     }
   }
-
+  //std::cout<<"liveVariableAnalysis"<<std::endl;
   liveVariableAnalysis();
+}
+
+bool CodeGenerator::compareLocList(List<Location*> *l1, List<Location*> *l2){
+  if(l1->NumElements() != l2->NumElements()){
+    return false;
+  }
+  for(int i = 0; i < l1->NumElements(); i++){
+    //std::cout<<"compareLocList: "<<l1->Nth(i)->GetName()<<" "<<l2->Nth(i)->GetName()<<std::endl;
+    if(l1->Nth(i)->GetName() != l2->Nth(i)->GetName() || l1->Nth(i)->GetSegment() != l2->Nth(i)->GetSegment() || l1->Nth(i)->GetOffset() != l2->Nth(i)->GetOffset()){
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CodeGenerator::compareLoc(Location *l1, Location *l2){
+  if( l1->GetName() == l2->GetName() && l1->GetSegment() == l2->GetSegment() && l1->GetOffset() == l2->GetOffset()){
+    return true;
+  }
+  return false;
 }
 
 void CodeGenerator::liveVariableAnalysis()
@@ -290,85 +312,193 @@ void CodeGenerator::liveVariableAnalysis()
         }
       }
       out->Unique();//remove duplicates
-      if (out != instr->liveOut)
-      {
-        changed = true;
-        instr->liveOut = out;
-      }else{
-        continue;
-      }
+      instr->liveOut = out;
       Location* k = instr->GetKill();
+      List<Location*>* g = instr->GetGen();
       List<Location*> *in = new List<Location*>; // IN'[TAC] = OUT[TAC] - KILL(TAC) + GEN(TAC) 
+      //std :: cout << "in: " << instr->liveIn->NumElements() << std :: endl;
       for(int j = 0; j < out->NumElements(); j++){
-        if((!k) || k!= out->Nth(j)){
+        if((!k) || out->Nth(j)!=k){
+        
           in->Append(out->Nth(j));
         }
       }
-      for(int j = 0; j < instr->GetGen()->NumElements(); j++){
-          in->Append(instr->GetGen()->Nth(j));
+      for(int j = 0; j < g->NumElements(); j++){
+          in->Append(g->Nth(j));
       }
       in->Unique();
-      instr->liveIn = in;
+      if (!in && !instr->liveIn)
+      {
+        continue;
+      }else if ((!in && instr->liveIn) || (in && !instr->liveIn))
+      {
+        changed = true;
+        instr->liveIn = in;
+      }else if (!compareLocList(instr->liveIn, in))
+      { 
+        changed = true;
+        instr->liveIn = in;
+      }else{
+        continue;
+      }
+      
       
     }
   }
   //print out live variables
-  /*
+   /*debugging
   for(int i = 0; i < code->NumElements(); i++){
     Instruction *instr = code->Nth(i);
-    printf("%s: ", instr->GetPrintNameForTac());
-    for(int j = 0; j < instr->liveVars.NumElements(); j++){
-      printf("%s ", instr->liveVars.Nth(j)->GetName());
+    for(int j = 0; j < instr->liveOut->NumElements(); j++){
+      printf("%s ", instr->liveOut->Nth(j)->GetName());
     }
     printf("\n");
   }
-  
+ 
   */
   
+
+  
 }
 
-void CodeGenerator::BuildInterferenceGraph()
-{
-    InterferenceGraph_t* current = NULL;
-
-    for (int i = 0; i < code->NumElements(); i++)
-    {
-        auto tac = code->Nth(i);
-        if (auto beginfunc_tac = dynamic_cast<BeginFunc*> (tac))
-            current = &(beginfunc_tac->interference_graph);
-
-        if (current)
-        {
-            for (auto from_tac : *(tac->live_vars_in))
-            {
-                if (current->find(from_tac) == current->end())
-                    (*current)[from_tac] = {};
-                
-                for (auto to_tac : *(tac->live_vars_in))
-                {
-                    if (from_tac != to_tac)
-                        (*current)[from_tac].insert(to_tac);
-                }
-            }
-
-            for (auto kill_tac : *(tac->GetKills()))
-            {
-                if (current->find(kill_tac) == current->end())
-                    (*current)[kill_tac] = {};
-                
-                for (auto out_tac : *(tac->live_vars_out))
-                {
-                    if (kill_tac != out_tac)
-                    {
-                        (*current)[kill_tac].insert(out_tac);
-                        (*current)[out_tac].insert(kill_tac);
-                    }
-                }
-            }
-        }
+List<Location*>*  CodeGenerator::reorderLoc(List<Location*> *l){
+  List<Location*> *newList = new List<Location*>;
+  //std::stack<Location*> *stack = new std::stack<Location*>;
+  int max = 0;
+  Location *maxLoc = nullptr;
+  while (l->NumElements() > 0)
+  {
+    for(int i = 0; i < l->NumElements(); i++){
+      Location *loc = l->Nth(i);
+      if (loc->GetInterferences()->NumElements() > max)
+      {
+        max = loc->GetInterferences()->NumElements();
+        maxLoc = loc;
+      }
     }
+
+    newList->Append(maxLoc);
+    l->Remove(maxLoc);
+    max = 0;
+  }
+  
+  return newList;
+  
 }
 
+Mips* CodeGenerator::interferenceGraph(){
+  List<Location*>* graphlst = nullptr;
+  Mips* mips = new Mips;
+  //std::stack<Hashtable<Hashtable<Location*>*>*> graphStack;
+  for (size_t i = 0; i < code->NumElements(); i++)
+  {
+    Instruction *instr = code->Nth(i);
+    Label *label = dynamic_cast<Label*>(instr);
+    BeginFunc *begin = NULL;
+    if(i<code->NumElements()-1){
+      begin = dynamic_cast<BeginFunc*>(code->Nth(i+1));
+    }
+
+    if (label && begin)
+    {
+      //std :: cout << "begin" << std :: endl;
+      graphlst = begin->graphList;
+    }
+    if (instr->liveOut->NumElements() == 0){
+      if (dynamic_cast<EndFunc*>(instr))
+      {
+        graphlst=reorderLoc(graphlst);
+        mips->AllocateRegisters(graphlst);
+      }
+      continue;
+    }
+    //std::cout<<"interferenceGraph: "<<instr->liveOut->NumElements()<<std::endl;
+    //kill
+    Location *kill = instr->GetKill();
+    if (kill)
+    {
+      
+      for (size_t j = 0; j < instr->liveOut->NumElements(); j++)
+      {
+        //std::cout<<"interferenceGraph: "<<instr->liveOut->Nth(j)->GetName()<<std::endl;
+        Location *loc = instr->liveOut->Nth(j);
+        kill->AddInterference(loc);
+        loc->AddInterference(kill);
+      }
+        graphlst->Remove(kill);
+        graphlst->Append(kill);
+      
+      
+    }
+
+    //other
+    Location *loc ;
+    for (size_t j = 0; j < instr->liveOut->NumElements(); j++)
+    {
+      loc = instr->liveOut->Nth(j);
+      //std :: cout << "interferenceGraph: " << loc->GetName() << std :: endl;
+      for (size_t k = 0; k < instr->liveOut->NumElements(); k++)
+      {
+        if (j == k)
+        {
+          continue;
+        }
+        //std :: cout << "addi: " << instr->liveOut->Nth(k)->GetName() << std :: endl;
+        loc->AddInterference(instr->liveOut->Nth(k));
+      }
+      
+      if(kill) loc->AddInterference(kill);
+      
+      graphlst->Remove(loc);
+      graphlst->Append(loc);
+      //std :: cout << "loc had int: " << loc->GetName() << loc->GetInterferences()->NumElements() <<graphlst->NumElements()<< std :: endl;
+    }//also enter oneself, avoid empty hashtable when removing
+  }
+
+  //print out interference graph
+ /*
+  for (size_t i = 0; i < code->NumElements(); i++)
+  {
+    Instruction *instr = code->Nth(i);
+    for (size_t j = 0; j < instr->liveOut->NumElements(); j++)
+    {
+      Location *loc = instr->liveOut->Nth(j);
+      printf("%s: ", loc->GetName());
+      for (size_t k = 0; k < loc->GetInterferences()->NumElements(); k++)
+      {
+        printf("%s ", loc->GetInterferences()->Nth(k)->GetName());
+      }
+      printf("\n");
+    }
+  } 
+*/
+  return mips;
+  
+  
+}
+
+/*
+void CodeGenerator::kColoring(Hashtable<Hashtable<Location*>*>* curGraph){
+  Iterator<Hashtable<Location*>*> iter = curGraph->GetIterator();
+  Hashtable<Location*> *kv;
+  List<Location*> *nodeList = new List<Location*>;
+  //int maxDegree = 0;
+  //Hashtable<Location*> *maxDegreeNode = nullptr;
+  while ((kv = iter.GetNextValue()) != nullptr)//find max degree
+  {
+      Iterator<Location*> iter2 = kv->GetIterator();
+      Location *kv2;
+      while ((kv2 = iter2.GetNextValue()) != nullptr)
+      {
+        
+      }
+      
+      
+  }
+
+}
+
+*/
 
 Location *CodeGenerator::GenArrayLen(Location *array)
 {
